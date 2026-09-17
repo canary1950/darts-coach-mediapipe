@@ -98,7 +98,22 @@ analyze.addEventListener("click",async()=>{
   const motion=side=>{const wi=side==="right"?16:15,si=side==="right"?12:11;let sum=0,prev=null;valid.forEach(x=>{const p={x:x.lm[wi].x-x.lm[si].x,y:x.lm[wi].y-x.lm[si].y};if(prev)sum+=dist(p,prev);prev=p});return sum};
   const selected=$("hand").value,arm=selected==="auto"?(motion("right")>=motion("left")?"right":"left"):selected,wi=arm==="right"?16:15,ei=arm==="right"?14:13,si=arm==="right"?12:11,oppS=arm==="right"?11:12;
   const seq=valid.map(x=>{const l=x.lm,scale=Math.max(.05,dist(l[11],l[12]));return{...x,w:{x:(l[wi].x-l[si].x)/scale,y:(l[wi].y-l[si].y)/scale},elbow:angle(l[si],l[ei],l[wi]),shoulder:(l[si].y-l[oppS].y)/scale,head:((l[0].x-(l[11].x+l[12].x)/2)/scale),hip:((l[23].x+l[24].x-l[11].x-l[12].x)/2)/scale}});
-  let release=1,best=-1;for(let i=1;i<seq.length-1;i++){const dt=Math.max(.001,seq[i].t-seq[i-1].t),speed=dist(seq[i].w,seq[i-1].w)/dt;if(speed>best){best=speed;release=i}}
+  const rawSpeeds=[0];for(let i=1;i<seq.length;i++){const dt=Math.max(.001,seq[i].t-seq[i-1].t);rawSpeeds[i]=dist(seq[i].w,seq[i-1].w)/dt}
+  const speeds=rawSpeeds.map((v,i)=>{let sum=0,n=0;for(let j=Math.max(0,i-1);j<=Math.min(rawSpeeds.length-1,i+1);j++){sum+=rawSpeeds[j];n++}return sum/n});
+  let release=1,best=-1;for(let i=2;i<seq.length-2;i++){if(speeds[i]>best){best=speeds[i];release=i}}
+  const moveThreshold=best*.14;let motionStart=release,motionEnd=release;
+  for(let i=release-1;i>1;i--){if(speeds[i]<moveThreshold&&speeds[i-1]<moveThreshold)break;motionStart=i}
+  for(let i=release+1;i<seq.length-1;i++){if(speeds[i]<moveThreshold&&speeds[i+1]<moveThreshold)break;motionEnd=i}
+  const motionPhase=(release-motionStart)/Math.max(1,motionEnd-motionStart);
+  const preStart=Math.max(motionStart,release-9),pre=speeds.slice(preStart,release+1),part=Math.max(1,Math.ceil(pre.length/3));
+  const avg=a=>a.length?a.reduce((s,x)=>s+x,0)/a.length:0;
+  const earlyPct=Math.round(avg(pre.slice(0,part))/best*100),midPct=Math.round(avg(pre.slice(part,part*2))/best*100),latePct=Math.round(avg(pre.slice(part*2))/best*100);
+  const beforePeak=avg(speeds.slice(Math.max(motionStart,release-3),release)),peakSharpness=best/Math.max(.001,beforePeak);
+  let accelType="uneven";
+  if(earlyPct>midPct+12&&earlyPct>latePct*.7)accelType="early";
+  else if(midPct<earlyPct-12&&latePct>midPct+18)accelType="twoStage";
+  else if(peakSharpness>1.65)accelType="sudden";
+  else if(earlyPct<midPct+5&&midPct<latePct+5&&latePct>=65)accelType="smooth";
   const elbowRange=Math.max(...seq.map(x=>x.elbow))-Math.min(...seq.map(x=>x.elbow)),shoulderSd=spread(seq.map(x=>x.shoulder)),headSd=spread(seq.map(x=>x.head)),hipSd=spread(seq.map(x=>x.hip));
   const releaseRatio=release/(seq.length-1),releaseElbow=seq[release].elbow,releaseTime=seq[release].t;
   const releaseScale=Math.max(.05,dist(seq[release].lm[11],seq[release].lm[12]));
@@ -107,21 +122,28 @@ analyze.addEventListener("click",async()=>{
   const finishEnd=Math.min(seq.length-1,release+Math.max(5,Math.round(seq.length*.25)));
   let finish=release;for(let i=release;i<=finishEnd;i++){if(seq[i].elbow>seq[finish].elbow)finish=i}
   const finishElbow=seq[finish].elbow,finishScore=clamp((finishElbow-125)*2.8,0,100);
-  const stability=clamp(100-shoulderSd*210,0,100),headStability=clamp(100-headSd*180,0,100),rhythm=clamp(100-Math.abs(releaseRatio-.68)*130,35,100),score=Math.round(.22*stability+.2*headStability+.2*rhythm+.18*clamp(100-Math.abs(elbowRange-55)*.7,45,100)+.2*finishScore);
+  const accelQuality=accelType==="smooth"?100:accelType==="uneven"?70:accelType==="sudden"?58:50;
+  const stability=clamp(100-shoulderSd*210,0,100),headStability=clamp(100-headSd*180,0,100),rhythm=clamp(accelQuality-Math.abs(motionPhase-.62)*55,30,100),score=Math.round(.22*stability+.2*headStability+.2*rhythm+.18*clamp(100-Math.abs(elbowRange-55)*.7,45,100)+.2*finishScore);
   $("score").textContent=score;$("mHand").textContent=arm==="right"?"右投げ":"左投げ";$("mElbow").textContent=Math.round(elbowRange)+"°";$("mShoulder").textContent=Math.round(stability)+"%";$("mHead").textContent=Math.round(headStability)+"%";
-  $("mRelease").textContent=Math.round(releaseRatio*100)+"%・"+releaseHeightLabel;$("mFinish").textContent=Math.round(finishElbow)+"°";
+  $("mRelease").textContent="動作内"+Math.round(motionPhase*100)+"%・"+releaseHeightLabel;$("mFinish").textContent=Math.round(finishElbow)+"°";
   const indexes=[Math.round(seq.length*.12),Math.round(seq.length*.35),Math.max(0,release-2),release,finish],labels=["構え","テイクバック","加速","リリースポイント","腕が最も伸びた位置"],frames=$("frames");frames.innerHTML="";
   for(let k=0;k<indexes.length;k++){const q=seq[clamp(indexes[k],0,seq.length-1)];await waitSeek(q.t);const fig=document.createElement("figure");fig.className="frame";const c=document.createElement("canvas"),cap=document.createElement("figcaption");cap.textContent=labels[k]+" "+q.t.toFixed(2)+"秒";fig.append(c,cap);frames.append(fig);const trail=seq.slice(Math.max(0,indexes[k]-7),indexes[k]+1).map(x=>x.lm[wi]);drawPose(c,video,q.lm,trail,arm)}
   const notes=[];
-  const releaseGood=releaseRatio>=.52&&releaseRatio<=.84&&releaseElbow>=120;
-  notes.push({good:releaseGood,text:"リリースチェック：動作全体の"+Math.round(releaseRatio*100)+"%（"+releaseTime.toFixed(2)+"秒）でリリースを検出しました。手首は"+releaseHeightLabel+"、肘角度は"+Math.round(releaseElbow)+"°です。"+(releaseGood?"加速からリリースへの流れは自然です。":"リリース時に肘が十分に開いているか、同じ位置で離せているかを確認しましょう。")});
+  const releaseGood=motionPhase>=.42&&motionPhase<=.82&&releaseElbow>=120;
+  notes.push({good:releaseGood,text:"リリースチェック：腕が動き始めてから"+Math.round(motionPhase*100)+"%（動画の"+releaseTime.toFixed(2)+"秒）でリリースを検出しました。手首は"+releaseHeightLabel+"、肘角度は"+Math.round(releaseElbow)+"°です。"+(releaseGood?"加速からリリースへの流れは自然です。":"リリース時に肘が十分に開いているか、同じ位置で離せているかを確認しましょう。")});
   notes.push({good:finishElbow>=155,text:"フィニッシュチェック：リリース後に腕が最も伸びたときの肘角度は"+Math.round(finishElbow)+"°です。"+(finishElbow>=165?"最後までしっかり腕を伸ばせています。":finishElbow>=155?"ほぼ最後まで腕を伸ばせています。":"腕の振りが途中で止まっています。ダーツを離した後も、指先を目標へ送るように腕を伸ばしましょう。")});
   notes.push({good:true,text:stability>=78?"投球中の肩の高さが安定しています。再現性につながる良い動きです。":"肩の上下動がやや大きめです。構えた肩の高さを保つ意識で、ゆっくり3投を繰り返してみましょう。"});
   notes.push({good:headStability>=78,text:headStability>=78?"頭の位置が安定し、狙いの基準が保たれています。":"頭が投球中に動いています。投げ終わるまでボード上の目標を見続けてみましょう。"});
   notes.push({good:elbowRange>=25&&elbowRange<=90,text:elbowRange<25?"肘の曲げ伸ばしが小さめです。力まず、前腕が自然に振り子になる範囲を少し広げましょう。":elbowRange>90?"肘の動きが大きめです。毎回同じ位置から動き始められるか確認しましょう。":"肘の曲げ伸ばしは無理のない範囲に収まっています。"});
-  notes.push({good:rhythm>=75,text:rhythm>=75?"最大加速が投球後半に現れ、リリースへ向かう流れがまとまっています。":"最大加速の時点が早い、または遅い傾向です。一定のテンポで「引く・送る」を練習しましょう。"});
+  let accelAdvice="";
+  if(accelType==="smooth")accelAdvice="最大加速チェック：速度は前半"+earlyPct+"%→中盤"+midPct+"%→終盤"+latePct+"%と段階的に上がっています。力を急に加えず、リリースへ滑らかに加速できています。";
+  else if(accelType==="early")accelAdvice="最大加速チェック：動き始めが最大速度の"+earlyPct+"%で、中盤は"+midPct+"%です。早い段階で力を使い、リリース前に速度が落ちています。引き始めは力まず、前腕が前へ向くところから加速しましょう。";
+  else if(accelType==="twoStage")accelAdvice="最大加速チェック：速度が前半"+earlyPct+"%→中盤"+midPct+"%→終盤"+latePct+"%で、中盤に一度減速してから再加速しています。テイクバックから前方への切り返しを止めず、一つの流れにしましょう。";
+  else if(accelType==="sudden")accelAdvice="最大加速チェック：最大速度が直前平均の"+peakSharpness.toFixed(1)+"倍まで急上昇しています。最後だけ強く押し出す動きです。加速を少し早めに始め、手首だけでなく前腕全体を滑らかに送りましょう。";
+  else accelAdvice="最大加速チェック：速度は前半"+earlyPct+"%・中盤"+midPct+"%・終盤"+latePct+"%で、上昇が一定ではありません。毎回同じテンポで、低速から徐々に速度を上げる練習が有効です。";
+  notes.push({good:accelType==="smooth",text:accelAdvice});
   $("advice").innerHTML=notes.map(n=>'<div class="advice '+(n.good?'':'warn')+'">'+(n.good?'✓ ':'△ ')+n.text+'</div>').join("");
-  latestResult={score,arm,elbowRange,stability,headStability,releaseRatio,releaseTime,releaseElbow,releaseHeightLabel,finishElbow,notes:notes.map(n=>n.text),participant:$("participant").value.trim()};
+  latestResult={score,arm,elbowRange,stability,headStability,releaseRatio,motionPhase,releaseTime,releaseElbow,releaseHeightLabel,finishElbow,accelType,earlyPct,midPct,latePct,notes:notes.map(n=>n.text),participant:$("participant").value.trim()};
   $("results").classList.remove("hidden");setStatus("分析が完了しました。結果を下に表示しています。",100);$("results").scrollIntoView({behavior:"smooth",block:"start"});
  }catch(e){console.error(e);setStatus("分析できませんでした："+(e.message||e),0)}finally{analyze.disabled=false}
 });
@@ -138,7 +160,8 @@ function resultText(){
   "肘角度の変化："+Math.round(r.elbowRange)+"°",
   "肩の安定性："+Math.round(r.stability)+"%",
   "頭の安定性："+Math.round(r.headStability)+"%",
-  "リリースポイント：動作の"+Math.round(r.releaseRatio*100)+"%・"+r.releaseHeightLabel+"・肘"+Math.round(r.releaseElbow)+"°",
+  "リリースポイント：投球動作内"+Math.round(r.motionPhase*100)+"%・"+r.releaseHeightLabel+"・肘"+Math.round(r.releaseElbow)+"°",
+  "加速変化：前半"+r.earlyPct+"%→中盤"+r.midPct+"%→終盤"+r.latePct+"%",
   "最後の腕の伸び："+Math.round(r.finishElbow)+"°",
   "",
   "【フォームへのコメント】",
