@@ -56,7 +56,17 @@ button,select{min-height:48px;border-radius:12px;border:1px solid #b9c8dc;backgr
 import{FilesetResolver,PoseLandmarker,DrawingUtils}from"https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/+esm";
 const $=id=>document.getElementById(id),file=$("file"),video=$("video"),analyze=$("analyze"),status=$("status"),statusText=$("statusText"),progress=$("progress");
 let objectUrl=null,landmarker=null,loaded=false,latestResult=null;
-file.addEventListener("change",()=>{const f=file.files&&file.files[0];if(!f)return;if(objectUrl)URL.revokeObjectURL(objectUrl);objectUrl=URL.createObjectURL(f);video.src=objectUrl;video.load();loaded=false;analyze.disabled=true;$("results").classList.add("hidden");status.style.display="block";statusText.textContent="動画を読み込んでいます…"});
+function resetAI(){
+ if(landmarker){try{landmarker.close()}catch(e){console.warn("AI reset",e)}landmarker=null}
+}
+file.addEventListener("change",()=>{
+ const selected=file.files&&file.files[0];if(!selected)return;
+ resetAI();video.pause();loaded=false;latestResult=null;analyze.disabled=true;
+ if(objectUrl){video.removeAttribute("src");video.load();URL.revokeObjectURL(objectUrl);objectUrl=null}
+ $("results").classList.add("hidden");$("frames").innerHTML="";$("advice").innerHTML="";$("shareMessage").style.display="none";progress.style.width="0%";
+ objectUrl=URL.createObjectURL(selected);video.src=objectUrl;video.load();file.value="";
+ status.style.display="block";statusText.textContent="新しい動画を読み込んでいます…";
+});
 video.addEventListener("loadedmetadata",()=>{loaded=Number.isFinite(video.duration)&&video.duration>0;analyze.disabled=!loaded;statusText.textContent=loaded?"動画を読み込みました。「動画を分析する」を押してください。":"この動画の長さを取得できませんでした。別の動画をお試しください。";progress.style.width="0%"});
 function setStatus(t,p){status.style.display="block";statusText.textContent=t;progress.style.width=p+"%"}
 async function initAI(){
@@ -78,7 +88,7 @@ function copyVideoFrame(source){const c=document.createElement("canvas");c.width
 analyze.addEventListener("click",async()=>{
  if(!loaded)return;analyze.disabled=true;$("results").classList.add("hidden");
  try{
-  await initAI();const count=Number($("quality").value),start=Math.min(.08,video.duration*.02),end=Math.max(start,video.duration-.08),data=[];video.pause();
+  resetAI();await initAI();const count=Number($("quality").value),start=Math.min(.08,video.duration*.02),end=Math.max(start,video.duration-.08),data=[];video.pause();
   for(let i=0;i<count;i++){
    const t=start+(end-start)*i/(count-1);await waitSeek(t);const r=landmarker.detectForVideo(video,Math.round(t*1000));const lm=r.landmarks&&r.landmarks[0];data.push({t,lm,shot:(i%Math.max(1,Math.round(count/12))===0)?copyVideoFrame(video):null});setStatus("身体の動きを分析中… "+(i+1)+"/"+count,5+Math.round(78*(i+1)/count));
   }
